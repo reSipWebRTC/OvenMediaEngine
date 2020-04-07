@@ -65,6 +65,8 @@ DashPacketizer::DashPacketizer(const ov::String &app_name, const ov::String &str
 		{
 			_ideal_duration_for_video = 5.0;
 		}
+
+		_video_scale = _video_track->GetTimeBase().GetExpr() * 1000.0;
 	}
 
 	if (audio_track != nullptr)
@@ -75,6 +77,8 @@ DashPacketizer::DashPacketizer(const ov::String &app_name, const ov::String &str
 		{
 			_ideal_duration_for_audio = 5.0;
 		}
+
+		_audio_scale = _audio_track->GetTimeBase().GetExpr() * 1000.0;
 	}
 
 	_stat_stop_watch.Start();
@@ -138,85 +142,162 @@ ov::String DashPacketizer::GetFileName(int64_t start_timestamp, common::MediaTyp
 
 bool DashPacketizer::WriteVideoInitInternal(const std::shared_ptr<ov::Data> &frame, const ov::String &init_file_name)
 {
-	uint32_t current_index = 0;
-	int sps_start_index = -1;
-	int sps_end_index = -1;
-	int pps_start_index = -1;
-	int pps_end_index = -1;
-	int total_start_pattern_size = 0;
+	const uint8_t* srcData = frame->GetDataAs<uint8_t>();
+	size_t dataOffset = 0;
+	size_t dataSize = frame->GetLength();
 
-	auto buffer = frame->GetDataAs<uint8_t>();
+	std::vector<std::pair<size_t, size_t>> offset_list;
 
-	// Parse SPS/PPS (0001/001 + SPS + 0001/001 + PPS)
-	while ((current_index + AVC_NAL_START_PATTERN_SIZE) < frame->GetLength())
+	// int total_start_pattern_size = 0;
+	int nal_packet_header_length = 3;
+
+	// Stage 1 - Extract the Offset and Lengh value of the NAL Packet
+
+	while ( dataOffset < dataSize )
 	{
-		int start_pattern_size = GetStartPatternSize(buffer + current_index);
+		size_t remainDataSize = dataSize - dataOffset;
+		const uint8_t* data = srcData + dataOffset;
 
-		if (start_pattern_size == 0)
+		if (remainDataSize >= 3 && 0x00 == data[0] && 0x00 == data[1] && 0x01 == data[2])
 		{
-			current_index++;
-			continue;
+			nal_packet_header_length = 3;
+			offset_list.emplace_back(dataOffset, 3); // Offset, SIZEOF(START_CODE[3])
+			dataOffset += 3;
 		}
-
-		total_start_pattern_size += start_pattern_size;
-
-		if (sps_start_index == -1)
+		else if (remainDataSize >= 4 && 0x00 == data[0] &&  0x00 == data[1] && 0x00 == data[2] && 0x01 == data[3])
 		{
-			sps_start_index = current_index + start_pattern_size;
-			current_index += start_pattern_size;
-			continue;
-		}
-		else if (sps_end_index == -1)
-		{
-			sps_end_index = current_index - 1;
-			pps_start_index = current_index + start_pattern_size;
-			current_index += start_pattern_size;
-			continue;
+			nal_packet_header_length = 4;
+			offset_list.emplace_back(dataOffset, 4); // Offset, SIZEOF(START_CODE[4])
+			dataOffset += 4;
 		}
 		else
 		{
-			pps_end_index = current_index - 1;
-			break;
+			dataOffset += 1;
 		}
 	}
 
+
+	// Stage 2  : Get position for SPS and PPS type
+
+	int sps_start_index = -1;
+	int sps_length = -1;
+	int pps_start_index = -1;
+	int pps_length = -1;
+
+	for (size_t index = 0; index < offset_list.size(); ++index)
+	{
+		size_t nalu_offset = 0;
+		size_t nalu_data_len = 0;
+
+		if (index != offset_list.size() - 1)
+		{
+			nalu_offset = offset_list[index].first + offset_list[index].second;
+			nalu_data_len = offset_list[index + 1].first - nalu_offset ;
+		}
+		else
+		{
+			nalu_offset = offset_list[index].first + offset_list[index].second;
+			nalu_data_len = dataSize - nalu_offset;
+		}
+
+
+		// [Difinition of NAL_UNIT_TYPE]
+
+		// - Coded slice of a non-IDR picture slice_layer_without_partitioning_rbsp( )
+		// NonIDR = 1,
+		// - Coded slice data partition A slice_data_partition_a_layer_rbsp( )
+		// DataPartitionA = 2,
+		// - Coded slice data partition B slice_data_partition_b_layer_rbsp( )
+		// DataPartitionB = 3,
+		// - Coded slice data partition C slice_data_partition_c_layer_rbsp( )
+		// DataPartitionC = 4,
+		// - Coded slice of an IDR picture slice_layer_without_partitioning_rbsp( )
+		// IDR = 5,
+		// - Supplemental enhancement information (SEI) sei_rbsp( )
+		// SEI = 6,
+		// - Sequence parameter set seq_parameter_set_rbsp( )
+		// SPS = 7,
+		// - Picture parameter set pic_parameter_set_rbsp( )
+		// PPS = 8,
+		// ...
+
+		uint8_t nalu_header = *(srcData + nalu_offset);
+		uint8_t nal_unit_type = (nalu_header)  & 0x01F;
+
+#if 0	// for debug
+		uint8_t forbidden_zero_bit = (nalu_header >> 7)  & 0x01;
+		uint8_t nal_ref_idc = (nalu_header >> 5)  & 0x03;
+		if ( (nal_unit_type == (uint8_t)5) || (nal_unit_type == (uint8_t)6) || (nal_unit_type == (uint8_t)7) || (nal_unit_type == (uint8_t)8))
+		{
+			logte("[%d] nal_ref_idc:%2d, nal_unit_type:%2d => offset:%d, nalu_size:%d, nalu_offset:%d, nalu_length:%d"
+				, index
+				, nal_ref_idc, nal_unit_type
+				, offset_list[index].first
+				, offset_list[index].second
+				, nalu_offset
+				, nalu_data_len);
+		}
+#endif
+
+		// SPS type
+		if (nal_unit_type == 7)
+		{
+			sps_start_index = nalu_offset;
+			sps_length = nalu_data_len;
+		}
+		// PPS type
+		else if (nal_unit_type == 8)
+		{
+			pps_start_index = nalu_offset;
+			pps_length = nalu_data_len;
+		}
+	}
+
+	// logte("nal_packet_header_length : %d", nal_packet_header_length);
+
 	// Check parsing result
-	if ((sps_start_index == -1) || (sps_end_index < (sps_start_index + 4)))
+	if ((sps_start_index == -1) || (sps_length < -1))
 	{
 		logte("Could not parse SPS (SPS: %d-%d, PPS: %d-%d) from %s frame for [%s/%s]",
-			  sps_start_index, sps_end_index, pps_start_index, pps_end_index,
-			  GetPacketizerName(),
-			  _app_name.CStr(), _stream_name.CStr());
+			sps_start_index, sps_length, pps_start_index, pps_length,
+			GetPacketizerName(),
+			_app_name.CStr(), _stream_name.CStr());
 
 		return false;
 	}
 
-	if ((pps_start_index <= sps_end_index) || (pps_start_index >= pps_end_index))
+	if ((pps_start_index == -1) || (pps_length < -1))
 	{
 		logte("Could not parse PPS (SPS: %d-%d, PPS: %d-%d) from %s frame for [%s/%s]",
-			  sps_start_index, sps_end_index, pps_start_index, pps_end_index,
-			  GetPacketizerName(),
-			  _app_name.CStr(), _stream_name.CStr());
+			sps_start_index, sps_length, pps_start_index, pps_length,
+			GetPacketizerName(),
+			_app_name.CStr(), _stream_name.CStr());
 
 		return false;
 	}
 
-	if ((total_start_pattern_size < 9) || (total_start_pattern_size > 12))
+	// Notice: One packet may contain multiple NAL packets. so, Removed the maximum pattern size limit.
+	// if ((total_start_pattern_size < 6) || (total_start_pattern_size > 12))
+
+	if ( !(nal_packet_header_length == 3 || nal_packet_header_length == 4) )
 	{
-		logte("Invalid patterns (%d, SPS: %d-%d, PPS: %d-%d) in %s frame for [%s/%s]",
-			  total_start_pattern_size,
-			  sps_start_index, sps_end_index, pps_start_index, pps_end_index,
-			  GetPacketizerName(),
-			  _app_name.CStr(), _stream_name.CStr());
+		logte("Invalid patterns (start code length : %d, SPS: %d-%d, PPS: %d-%d) in %s frame for [%s/%s]",
+			nal_packet_header_length,
+			sps_start_index, sps_length, pps_start_index, pps_length,
+			GetPacketizerName(),
+			_app_name.CStr(), _stream_name.CStr());
 
 		return false;
 	}
+
+
+	//Stage 3 : Extracts SPS/PPS data to create initialization packets.
 
 	// Extract SPS from frame
-	auto avc_sps = frame->Subdata(sps_start_index, sps_end_index - sps_start_index + 1);
+	auto avc_sps = frame->Subdata(sps_start_index, sps_length);
 
 	// Extract PPS from frame
-	auto avc_pps = frame->Subdata(pps_start_index, pps_end_index - pps_start_index + 1);
+	auto avc_pps = frame->Subdata(pps_start_index, pps_length);
 
 	// Create an init m4s for video stream
 	// init.m4s not have duration
@@ -230,7 +311,8 @@ bool DashPacketizer::WriteVideoInitInternal(const std::shared_ptr<ov::Data> &fra
 		return false;
 	}
 
-	_avc_nal_header_size = avc_sps->GetLength() + avc_pps->GetLength() + total_start_pattern_size;
+	// logtd("sps_lengh : %d, pps_length : %d", avc_sps->GetLength(), avc_pps->GetLength());
+	_avc_nal_header_size = (nal_packet_header_length + avc_sps->GetLength()) + (nal_packet_header_length + avc_pps->GetLength());
 
 	// Store data for video stream
 	_video_init_file = std::make_shared<SegmentData>(common::MediaType::Video, 0, init_file_name, 0, 0, init_data);
@@ -315,8 +397,13 @@ bool DashPacketizer::AppendVideoFrameInternal(std::shared_ptr<PacketizerFrameDat
 	if (static_cast<int>(data->GetLength()) < offset)
 	{
 		// Not enough data
-		logtw("Invalid frame: frame is too short: %zu bytes", data->GetLength());
+		logtw("Invalid frame: frame is too short: expected: %d, but %zu bytes", offset, data->GetLength());
 		return false;
+	}
+
+	if(frame->type == PacketizerFrameType::VideoKeyFrame)
+	{
+		offset += GetStartPatternSize(data->GetDataAs<uint8_t>() + offset);
 	}
 
 	// Skip NAL header
@@ -350,7 +437,7 @@ bool DashPacketizer::AppendVideoFrameInternal(std::shared_ptr<PacketizerFrameDat
 	{
 		if (_video_start_time == -1LL)
 		{
-			_video_start_time = GetCurrentMilliseconds() - (current_segment_duration * _video_track->GetTimeBase().GetExpr() * 1000.0);
+			_video_start_time = GetCurrentMilliseconds() - current_segment_duration;
 		}
 
 		// Check the timestamp to determine if a new segment is to be created
@@ -489,7 +576,7 @@ bool DashPacketizer::AppendAudioFrameInternal(std::shared_ptr<PacketizerFrameDat
 
 	if (_audio_start_time == -1LL)
 	{
-		_audio_start_time = GetCurrentMilliseconds() - (current_segment_duration * _audio_track->GetTimeBase().GetExpr() * 1000.0);
+		_audio_start_time = GetCurrentMilliseconds() - current_segment_duration;
 	}
 
 	// Skip ADTS header
@@ -747,8 +834,8 @@ bool DashPacketizer::UpdatePlayList()
 	{
 		if ((_last_video_pts >= 0LL) && (_last_audio_pts >= 0LL))
 		{
-			int64_t video_pts = static_cast<int64_t>(_last_video_pts * _video_track->GetTimeBase().GetExpr() * 1000.0);
-			int64_t audio_pts = static_cast<int64_t>(_last_audio_pts * _audio_track->GetTimeBase().GetExpr() * 1000.0);
+			int64_t video_pts = static_cast<int64_t>(_last_video_pts * _video_scale);
+			int64_t audio_pts = static_cast<int64_t>(_last_audio_pts * _audio_scale);
 
 			logts("[%s/%s] DASH A-V Sync: %lld (A: %lld, V: %lld)",
 				_app_name.CStr(), _stream_name.CStr(),

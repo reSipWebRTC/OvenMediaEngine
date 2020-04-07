@@ -71,11 +71,16 @@ bool BitstreamToAnnexB::ConvertKeyFrame(AvcPacketType packet_type, ov::ByteStrea
 				return false;
 			}
 
-			logtd("configurationVersion = %d", read_stream.Read8());
-			logtd("AVCProfileIndication = %d", read_stream.Read8());
-			logtd("profile_compatibility = %d", read_stream.Read8());
-			logtd("AVCLevelIndication = %d", read_stream.Read8());
-			logtd("lengthSizeMinusOne = %d", read_stream.Read8() & 0x03);
+			[[maybe_unused]] auto configurationVersion = read_stream.Read8();
+			logtd("configurationVersion = %d", configurationVersion);
+			uint8_t AVCProfileIndication = read_stream.Read8();
+			logtd("AVCProfileIndication = %d", AVCProfileIndication);
+			uint8_t profile_compatibility = read_stream.Read8();
+			logtd("profile_compatibility = %d", profile_compatibility);
+			uint8_t AVCLevelIndication = read_stream.Read8();
+			logtd("AVCLevelIndication = %d", AVCLevelIndication);
+			uint8_t lengthSizeMinusOne = read_stream.Read8() & 0x03;
+			logtd("lengthSizeMinusOne = %d", lengthSizeMinusOne);
 
 			// Number of SPS
 			uint8_t sps_byte = read_stream.Read8();
@@ -137,10 +142,10 @@ bool BitstreamToAnnexB::ConvertKeyFrame(AvcPacketType packet_type, ov::ByteStrea
 
 			data->Clear();
 
-			data->Append(START_CODE, 4);
+			data->Append(START_CODE, sizeof(START_CODE));
 			data->Append(_sps.get());
 
-			data->Append(START_CODE, 4);
+			data->Append(START_CODE, sizeof(START_CODE));
 			data->Append(_pps.get());
 
 			return true;
@@ -156,10 +161,10 @@ bool BitstreamToAnnexB::ConvertKeyFrame(AvcPacketType packet_type, ov::ByteStrea
 			// TODO(soulk) : NVENC HW 코덱은 Key Frame 에 SPS+PPS+IDR NAL 패킷이 모두 포함되어 있다. 
 			//				 중복으로 SPS/PPS 전송되지 않도록 예외 처리해야 한다.
 
-			data->Append(START_CODE, 4);
+			data->Append(START_CODE, sizeof(START_CODE));
 			data->Append(_sps.get());
 
-			data->Append(START_CODE, 4);
+			data->Append(START_CODE, sizeof(START_CODE));
 			data->Append(_pps.get());
 
 			return ConvertInterFrame(packet_type, read_stream, data);
@@ -170,7 +175,7 @@ bool BitstreamToAnnexB::ConvertKeyFrame(AvcPacketType packet_type, ov::ByteStrea
 			// AVC end of sequence (lower level NALU sequence ender is not required or supported)
 			data->Clear();
 
-			data->Append(START_CODE, 4);
+			data->Append(START_CODE, sizeof(START_CODE));
 
 			return true;
 		}
@@ -201,14 +206,10 @@ bool BitstreamToAnnexB::ConvertInterFrame(AvcPacketType packet_type, ov::ByteStr
 
 		auto nal_data = read_stream.GetRemainData()->Subdata(0LL, nal_length);
 
-#if DEBUG
-		auto skipped = read_stream.Skip(nal_length);
+		[[maybe_unused]] auto skipped = read_stream.Skip(nal_length);
 		OV_ASSERT2(skipped == nal_length);
-#else // DEBUG
-		read_stream.Skip(nal_length);
-#endif // DEBUG
 
-		data->Append(START_CODE, 4);
+		data->Append(START_CODE, sizeof(START_CODE));
 		data->Append(nal_data.get());
 	}
 
@@ -286,7 +287,6 @@ bool BitstreamToAnnexB::Convert(const std::shared_ptr<ov::Data> &data, int64_t &
 		case AvcFrameType::VideoInfo:
 			break;
 	}
-
 	return false;
 }
 
@@ -318,11 +318,13 @@ bool BitstreamToAnnexB::ParseSequenceHeader(const uint8_t *data,
 	}
 
 	data += 5;
-	logtd("configurationVersion  = %d", *(data++));
+	[[maybe_unused]] auto version = *(data++);
+	logtd("configurationVersion  = %d", version);
 	avc_profile = *(data++);
 	avc_profile_compatibility = *(data++);
 	avc_level = *(data++);
-	logtd("lengthSizeMinusOne = %d", *(data++) & 0x03);
+	[[maybe_unused]] auto length_size = *(data++) & 0x03;
+	logtd("lengthSizeMinusOne = %d", length_size);
 
 	logtd("numOfSequenceParameterSets = reserve(%02x) + %d", *data & 0xE0, *data & 0x1F); // reserve(3) + unsigned int(5)
 	int sps_count = *data & 0x1F;

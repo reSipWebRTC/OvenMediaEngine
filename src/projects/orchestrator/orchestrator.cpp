@@ -279,6 +279,11 @@ bool Orchestrator::ApplyOriginMap(const std::vector<info::Host> &host_list)
 	return result;
 }
 
+const std::vector<std::shared_ptr<Orchestrator::VirtualHost>>& Orchestrator::GetVirtualHostList()
+{
+	return _virtual_host_list;
+}
+
 Orchestrator::ItemState Orchestrator::ProcessDomainList(std::vector<Domain> *domain_list, const cfg::Domain &domain_config) const
 {
 	bool is_changed = false;
@@ -906,7 +911,7 @@ Orchestrator::Result Orchestrator::CreateApplicationInternal(const ov::String &v
 	if (ParseVHostAppName(vhost_app_name, &vhost_name, nullptr))
 	{
 		auto vhost = GetVirtualHost(vhost_name);
-		*app_info = info::Application(vhost->host_info, GetNextAppId(), vhost_app_name);
+		*app_info = info::Application(vhost->host_info, GetNextAppId(), vhost_app_name, true);
 		return CreateApplicationInternal(vhost_name, *app_info);
 	}
 
@@ -991,7 +996,7 @@ Orchestrator::Result Orchestrator::CreateApplication(const info::Host &host_info
 
 	auto vhost_name = host_info.GetName();
 
-	info::Application app_info(host_info, GetNextAppId(), ResolveApplicationName(vhost_name, app_config.GetName()), app_config);
+	info::Application app_info(host_info, GetNextAppId(), ResolveApplicationName(vhost_name, app_config.GetName()), app_config, false);
 
 	return CreateApplicationInternal(vhost_name, app_info);
 }
