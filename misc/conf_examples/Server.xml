@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 
-<Server version="5">
+<Server version="6">
 	<Name>OvenMediaEngine</Name>
 	<!-- Host type (origin/edge) -->
 	<Type>origin</Type>
@@ -41,6 +41,13 @@
 			</WebRTC>
 		</Publishers>
 	</Bind>
+
+	<!-- P2P works only in WebRTC -->
+	<!--
+	<P2P>
+		<MaxClientPeersPerHostPeer>2</MaxClientPeersPerHostPeer>
+	</P2P>
+	-->
 
 	<VirtualHosts>
 		<!-- You can use wildcard like this to include multiple XMLs -->
@@ -100,80 +107,31 @@
 					<!-- Application type (live/vod) -->
 					<Type>live</Type>
 					<Encodes>
-						<Encode>
-							<Name>VP8</Name>
-							<Audio>
-								<Codec>opus</Codec>
-								<Bitrate>128000</Bitrate>
+                        <Encode>
+                            <Name>bypass</Name>
+                            <Audio>
+                                <Bypass>true</Bypass>
+                            </Audio>
+                            <Video>
+                                <Bypass>true</Bypass>
+                            </Video>
+                        </Encode>
+                        <Encode>
+                            <Name>opus</Name>
+                            <Audio>
+                                <Codec>opus</Codec>
+                                <Bitrate>128000</Bitrate>
 								<Samplerate>48000</Samplerate>
 								<Channel>2</Channel>
-							</Audio>
-							<Video>
-								<Codec>vp8</Codec>
-								<Width>640</Width>
-								<Height>360</Height>
-								<Bitrate>500000</Bitrate>
-								<Framerate>30</Framerate>
-							</Video>
-						</Encode>
-						<Encode>
-							<Name>H264</Name>
-							<Audio>
-								<Codec>aac</Codec>
-								<Bitrate>128000</Bitrate>
-								<Samplerate>48000</Samplerate>
-								<Channel>2</Channel>
-							</Audio>
-							<Video>
-								<Codec>h264</Codec>
-								<Width>640</Width>
-								<Height>360</Height>
-								<Bitrate>500000</Bitrate>
-								<Framerate>30</Framerate>
-							</Video>
-						</Encode>
-						<Encode>
-							<Name>BYPASS</Name>
-							<!-- If you want to use bypass. For browser compatibility, the h264.bframe option must be fixed to 0.-->
-							<Video>
-								<Bypass>true</Bypass>
-							</Video>							
-							<Audio>
-								<Bypass>true</Bypass>
-							</Audio>
-						</Encode>
-						<Encode>
-							<Name>WEBRTC_BYPASS</Name>
-							<!-- If you want to use bypass. For browser compatibility, the h264.bframe option must be fixed to 0.-->
-							<Video>
-								<Bypass>true</Bypass>
-							</Video>							
-							<Audio>
-								<Codec>opus</Codec>
-								<Bitrate>128000</Bitrate>
-								<Samplerate>48000</Samplerate>
-								<Channel>2</Channel>
-							</Audio>
-						</Encode>					
-					</Encodes>
+                            </Audio>
+                        </Encode>
+                    </Encodes>
 					<Streams>
 						<Stream>
 							<Name>${OriginStreamName}_o</Name>
 							<Profiles>
-								<Profile>VP8</Profile>
-								<Profile>H264</Profile>
-							</Profiles>
-						</Stream>
-						<Stream>
-							<Name>${OriginStreamName}_bypass</Name>
-							<Profiles>
-								<Profile>BYPASS</Profile>
-							</Profiles>
-						</Stream>
-						<Stream>
-							<Name>${OriginStreamName}_webrtc</Name>
-							<Profiles>
-								<Profile>WEBRTC_BYPASS</Profile>
+								<Profile>bypass</Profile>
+								<Profile>opus</Profile>
 							</Profiles>
 						</Stream>
 					</Streams>

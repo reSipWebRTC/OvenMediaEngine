@@ -11,12 +11,13 @@
 
 namespace pvd
 {
-	std::shared_ptr<OvtStream> OvtStream::Create(const std::shared_ptr<pvd::Application> &application, const ov::String &stream_name,
+	std::shared_ptr<OvtStream> OvtStream::Create(const std::shared_ptr<pvd::Application> &application, 
+											const uint32_t stream_id, const ov::String &stream_name,
 					  						const std::vector<ov::String> &url_list)
 	{
 		info::Stream stream_info(*std::static_pointer_cast<info::Application>(application), StreamSourceType::Ovt);
 
-		stream_info.SetId(application->IssueUniqueStreamId());
+		stream_info.SetId(stream_id);
 		stream_info.SetName(stream_name);
 
 		auto stream = std::make_shared<OvtStream>(application, stream_info, url_list);
@@ -34,7 +35,6 @@ namespace pvd
 			: pvd::Stream(application, stream_info)
 	{
 		_last_request_id = 0;
-		_stop_thread_flag = false;
 		_state = State::IDLE;
 
 		for(auto &url : url_list)
@@ -61,11 +61,9 @@ namespace pvd
 
 	bool OvtStream::Start()
 	{
-		if (_stop_thread_flag)
-		{
-			return false;
-		}
-		
+		_recv_buffer.SetLength(OVT_DEFAULT_MAX_PACKET_SIZE);
+		ResetRecvBuffer();
+
 		// For statistics
 		auto begin = std::chrono::steady_clock::now();
 		if (!ConnectOrigin())
@@ -75,7 +73,7 @@ namespace pvd
 
 		auto end = std::chrono::steady_clock::now();
 		std::chrono::duration<double, std::milli> elapsed = end - begin;
-		auto origin_request_time_msec = elapsed.count();
+		_origin_request_time_msec = elapsed.count();
 
 		begin = std::chrono::steady_clock::now();
 		if (!RequestDescribe())
@@ -83,38 +81,44 @@ namespace pvd
 			return false;
 		}
 
+		end = std::chrono::steady_clock::now();
+		elapsed = end - begin;
+		_origin_response_time_msec = elapsed.count();
+
+		return pvd::Stream::Start();
+	}
+	
+	bool OvtStream::Play()
+	{
 		if (!RequestPlay())
 		{
 			return false;
 		}
-		end = std::chrono::steady_clock::now();
-		elapsed = end - begin;
-		auto origin_response_time_msec = elapsed.count();
-		
-		_stop_thread_flag = false;
-		_worker_thread = std::thread(&OvtStream::WorkerThread, this);
-		_worker_thread.detach();
 
 		_stream_metrics = StreamMetrics(*std::static_pointer_cast<info::Stream>(GetSharedPtr()));
 		if(_stream_metrics != nullptr)
 		{
-			_stream_metrics->SetOriginRequestTimeMSec(origin_request_time_msec);
-			_stream_metrics->SetOriginResponseTimeMSec(origin_response_time_msec);
+			_stream_metrics->SetOriginRequestTimeMSec(_origin_request_time_msec);
+			_stream_metrics->SetOriginResponseTimeMSec(_origin_response_time_msec);
 		}
 
-		return pvd::Stream::Start();
+		return pvd::Stream::Play();
 	}
 
 	bool OvtStream::Stop()
 	{
-		if(_state == State::STOPPING || _state == State::STOPPED || _state == State::IDLE)
+		// Already stopping
+		if(_state != State::PLAYING)
 		{
-			return false;
+			return true;
 		}
-
-		_state = State::STOPPING;
-		RequestStop();
-
+		
+		if(!RequestStop())
+		{
+			// Force terminate 
+			_state = State::ERROR;
+		}
+	
 		return pvd::Stream::Stop();
 	}
 
@@ -154,14 +158,6 @@ namespace pvd
 		{
 			_state = State::ERROR;
 			logte("Cannot connect to origin server (%s) : %s:%d", error->GetMessage().CStr(), _curr_url->Domain().CStr(), _curr_url->Port());
-			return false;
-		}
-
-		timeval tv = {3,0};
-		if(!_client_socket.SetRecvTimeout(tv))
-		{
-			_state = State::ERROR;
-			logte("To set sockopt error");
 			return false;
 		}
 
@@ -373,13 +369,24 @@ namespace pvd
 
 	bool OvtStream::ReceivePlay(uint32_t request_id)
 	{
-		auto packet = ReceivePacket();
-		if (packet == nullptr || packet->PayloadLength() <= 0)
+		auto result = ProceedToReceivePacket();
+		std::shared_ptr<OvtPacket> packet = nullptr;
+		if(result == ReceivePacketResult::COMPLETE)
 		{
+			packet = GetPacket();
+			if (packet == nullptr || packet->PayloadLength() <= 0)
+			{
+				_state = State::ERROR;
+				return false;
+			}
+		}
+		else
+		{
+			logte("%s/%s(%u) - Could not receive packet : err(%d)", GetApplicationInfo().GetName().CStr(), GetName().CStr(), GetId(), static_cast<uint8_t>(result));
 			_state = State::ERROR;
 			return false;
 		}
-
+		
 		// Parsing Payload
 		ov::String payload((const char *) packet->Payload(), packet->PayloadLength());
 		ov::JsonObject object = ov::Json::Parse(payload);
@@ -510,11 +517,25 @@ namespace pvd
 
 		while(true)
 		{
-			auto packet = ReceivePacket();
-			if(packet == nullptr)
+			auto result = ProceedToReceivePacket();
+			std::shared_ptr<OvtPacket> packet = nullptr;
+			if(result == ReceivePacketResult::COMPLETE)
 			{
+				packet = GetPacket();
+				if (packet == nullptr || packet->PayloadLength() <= 0)
+				{
+					// Unexpected error
+					_state = State::ERROR;
+					return nullptr;
+				}
+			}
+			else
+			{
+				logte("%s/%s(%u) - Could not receive packet : err(%d)", GetApplicationInfo().GetName().CStr(), GetName().CStr(), GetId(), static_cast<uint8_t>(result));
+				_state = State::ERROR;
 				return nullptr;
 			}
+		
 
 			data->Append(packet->Payload(), packet->PayloadLength());
 
@@ -527,199 +548,205 @@ namespace pvd
 		return data;
 	}
 
-	std::shared_ptr<OvtPacket> OvtStream::ReceivePacket()
+	void OvtStream::ResetRecvBuffer()
 	{
-		auto packet = std::make_shared<OvtPacket>();
-		auto data = ov::Data();
-
-		data.Reserve(OVT_DEFAULT_MAX_PACKET_SIZE);
-		data.SetLength(OVT_FIXED_HEADER_SIZE);
-
-		auto buffer = data.GetWritableDataAs<uint8_t>();
-
-		/////////////////////////////////////////////////
-		// Receive header first
-		/////////////////////////////////////////////////
-		off_t offset = 0LL;
-		size_t remained = data.GetLength();
-		size_t read_bytes = 0ULL;
-		while (true)
-		{
-			// The Recv function is returned when timed out (3 sec)
-			auto error = _client_socket.Recv(buffer + offset, remained, &read_bytes);
-			if (error != nullptr || read_bytes == 0)
-			{
-				_state = State::ERROR;
-				if(error != nullptr)
-				{
-					logte("An error occurred while receive data: %s", error->ToString().CStr());
-				}
-				else
-				{
-					logte("No message received from Origin server : timeout");
-				}
-				_client_socket.Close();
-				return nullptr;
-			}
-
-			if(_stream_metrics != nullptr)
-			{
-				_stream_metrics->IncreaseBytesIn(read_bytes);
-			}
-
-			remained -= read_bytes;
-			offset += read_bytes;
-
-			if (remained == 0)
-			{
-				// Received the header completely
-				if (!packet->LoadHeader(data))
-				{
-					_state = State::ERROR;
-					logte("An error occurred while receive data: Invalid packet");
-					_client_socket.Close();
-					return nullptr;
-				}
-
-				break;
-			}
-			else if (remained > 0)
-			{
-				continue;
-			}
-			else if (remained < 0)
-			{
-				_state = State::ERROR;
-				logte("An error occurred while receive data: Socket is not working properly.");
-				//_client_socket.Close();
-				return nullptr;
-			}
-		}
-
-		if (packet->PayloadLength() == 0)
-		{
-			return packet;
-		}
-
-		/////////////////////////////////////////////////
-		// Receive remained payload
-		/////////////////////////////////////////////////
-
-		data.SetLength(packet->PayloadLength());
-		buffer = data.GetWritableDataAs<uint8_t>();
-		offset = 0L;
-		remained = packet->PayloadLength();
-		read_bytes = 0ULL;
-
-		while (true)
-		{
-			auto error = _client_socket.Recv(buffer + offset, remained, &read_bytes);
-			if (error != nullptr || read_bytes == 0)
-			{
-				_state = State::ERROR;
-				if(error != nullptr)
-				{
-					logte("An error occurred while receive data: %s", error->ToString().CStr());
-				}
-				else
-				{
-					logte("No message received from Origin server : timeout");
-				}
-				_client_socket.Close();
-				return nullptr;
-			}
-
-			remained -= read_bytes;
-			offset += read_bytes;
-
-			if(_stream_metrics != nullptr)
-			{
-				_stream_metrics->IncreaseBytesIn(read_bytes);
-			}
-
-			if (remained == 0)
-			{
-				// Received the header completely
-				if (!packet->SetPayload(data.GetDataAs<uint8_t>(), data.GetLength()))
-				{
-					_state = State::ERROR;
-					logte("An error occurred while receive data: Invalid packet");
-					_client_socket.Close();
-					return nullptr;
-				}
-
-				break;
-			}
-			else if (remained > 0)
-			{
-				continue;
-			}
-			else if (remained < 0)
-			{
-				_state = State::ERROR;
-				logte("An error occurred while receive data: Socket is not working properly.");
-				_client_socket.Close();
-				return nullptr;
-			}
-		}
-
-		return std::move(packet);
+		_recv_buffer_offset = 0;
 	}
 
-	void OvtStream::WorkerThread()
+	OvtStream::ReceivePacketResult OvtStream::ProceedToReceivePacket(bool non_block)
 	{
-		while (!_stop_thread_flag)
+		if(_packet_mold == nullptr)
 		{
-			auto packet = ReceivePacket();
-			// Validation
-			if (packet == nullptr)
-			{
-				logte("The origin server may have problems. Try to terminate %s stream", GetName().CStr());
-				_state = State::ERROR;
-				break;
-			}
-			else if(packet->SessionId() != _session_id)
-			{
-				logte("An error occurred while receive data: An unexpected packet was received. Delete stream : %s", GetName().CStr());
-				_state = State::ERROR;
-				break;
-			}
-			else if(packet->PayloadType() == OVT_PAYLOAD_TYPE_STOP)
-			{
-				ReceiveStop(_last_request_id, packet);
-				logti("%s OvtStream has finished gracefully", GetName().CStr());
-				_state = State::STOPPED;
-				break;
-			}
-			else if(packet->PayloadType() == OVT_PAYLOAD_TYPE_MEDIA_PACKET)
-			{
-				_depacketizer.AppendPacket(packet);
+			_packet_mold = std::make_shared<OvtPacket>();
+		}
 
-				if (_depacketizer.IsAvaliableMediaPacket())
-				{
-					auto media_packet = _depacketizer.PopMediaPacket();
+		if(_packet_mold->IsPacketAvailable() == true)
+		{
+			return ReceivePacketResult::ALREADY_COMPLETED;
+		}
+		
+		while(true)
+		{
+			auto buffer = _recv_buffer.GetWritableDataAs<uint8_t>();
+			size_t remained = 0;
+			size_t read_bytes = 0ULL;
 
-					// Make Header (Fragmentation) if it is H.264
-					auto track = GetTrack(media_packet->GetTrackId());
-					if(track->GetCodecId() == common::MediaCodecId::H264)
-					{
-						AvcVideoPacketFragmentizer fragmentizer;
-						fragmentizer.MakeHeader(media_packet);
-					}
-
-					_application->SendFrame(GetSharedPtrAs<info::Stream>(), media_packet);
-				}
+			// Making header is not completed
+			if(_packet_mold->IsHeaderAvailable() == false)
+			{
+				remained = OVT_FIXED_HEADER_SIZE - _recv_buffer_offset;
 			}
 			else
 			{
-				logte("An error occurred while receive data: An unexpected packet was received. Delete stream : %s", GetName().CStr());
+				remained = _packet_mold->PayloadLength() - _recv_buffer_offset;
+			}
+				
+			auto error = _client_socket.Recv(buffer + _recv_buffer_offset, remained, &read_bytes, non_block);
+			if(read_bytes == 0)
+			{
+				if (error != nullptr)
+				{
+					logte("An error occurred while receiving packet: %s", error->ToString().CStr());
+					_client_socket.Close();
+					_state = State::ERROR;
+					ResetRecvBuffer();
+					return ReceivePacketResult::ERROR;
+				}
+				else
+				{
+					return ReceivePacketResult::IMCOMPLETE;
+				}
+			}
+				
+			_recv_buffer_offset += read_bytes;
+			remained -= read_bytes;
+
+			if(remained == 0)
+			{
+				if(_packet_mold->IsHeaderAvailable() == false)
+				{
+					// Received the header completely
+					if (!_packet_mold->LoadHeader(_recv_buffer))
+					{
+						logte("An error occurred while receiving header: Invalid packet");
+						_client_socket.Close();
+						_state = State::ERROR;
+						ResetRecvBuffer();
+						return ReceivePacketResult::ERROR;
+					}
+				}
+				else
+				{
+					if(!_packet_mold->SetPayload(_recv_buffer.GetDataAs<uint8_t>(), _recv_buffer_offset))
+					{
+						logte("An error occurred while receiving payload: Invalid packet");
+						_client_socket.Close();
+						_state = State::ERROR;
+						ResetRecvBuffer();
+						return ReceivePacketResult::ERROR;
+					}
+				}
+
+				ResetRecvBuffer();
+
+				if (_packet_mold->IsPacketAvailable())
+				{
+					return ReceivePacketResult::COMPLETE;
+				}
+				else
+				{
+					continue;
+				}
+			}
+			else if(remained > 0)
+			{
+				continue;
+			}
+			// error
+			else if(remained < 0)
+			{
+				logte("An error occurred while receive data: Invalid packet");
+				_client_socket.Close();
 				_state = State::ERROR;
-				break;
+				ResetRecvBuffer();
+				return ReceivePacketResult::ERROR;
 			}
 		}
 
-		// It will be deleted later when the Provider tries to create a stream which is same name.
-		// Because it cannot delete it self.
-		_state = State::STOPPED;
+		return ReceivePacketResult::COMPLETE;
+	}
+
+	std::shared_ptr<OvtPacket> OvtStream::GetPacket()
+	{
+		if(_packet_mold == nullptr || _packet_mold->IsPacketAvailable() == false)
+		{
+			return nullptr;
+		}
+
+		// becasue _packet_mold will be initialized when InitRecvBuffer is called
+		ResetRecvBuffer();
+
+		return std::move(_packet_mold);;
+	}
+
+	int OvtStream::GetFileDescriptorForDetectingEvent()
+	{
+		return _client_socket.GetSocket().GetSocket();
+	}
+
+	Stream::ProcessMediaResult OvtStream::ProcessMediaPacket()
+	{
+		// Non block
+		auto result = ProceedToReceivePacket(true);
+		std::shared_ptr<OvtPacket> packet = nullptr;
+		if(result == ReceivePacketResult::COMPLETE)
+		{
+			packet = GetPacket();
+		}
+		else if(result == ReceivePacketResult::IMCOMPLETE)
+		{
+			return ProcessMediaResult::PROCESS_MEDIA_TRY_AGAIN;
+		}
+		else
+		{
+			logte("%s/%s(%u) - Could not receive packet : err(%d)", GetApplicationInfo().GetName().CStr(), GetName().CStr(), GetId(), static_cast<uint8_t>(result));
+			_state = State::ERROR;
+			return ProcessMediaResult::PROCESS_MEDIA_FAILURE;
+		}
+		
+		// Validation
+		if (packet == nullptr)
+		{
+			logte("The origin server may have problems. Try to terminate %s/%s(%u) stream", 
+					GetApplicationInfo().GetName().CStr(), GetName().CStr(), GetId());
+			_state = State::ERROR;
+			return Stream::ProcessMediaResult::PROCESS_MEDIA_FAILURE;
+		}
+
+		if(packet->PayloadType() == OVT_PAYLOAD_TYPE_STOP)
+		{
+			ReceiveStop(_last_request_id, packet);
+			logti(" %s/%s(%u) OvtStream thread has finished gracefully", 
+				GetApplicationInfo().GetName().CStr(), GetName().CStr(), GetId());
+			_state = State::STOPPED;
+			return Stream::ProcessMediaResult::PROCESS_MEDIA_FINISH;
+		}
+
+		if(packet->SessionId() != _session_id)
+		{
+			logte("An error occurred while receive data: An unexpected packet was received. Terminate stream thread : %s/%s(%u)", 
+					GetApplicationInfo().GetName().CStr(), GetName().CStr(), GetId());
+			_state = State::ERROR;
+			return Stream::ProcessMediaResult::PROCESS_MEDIA_FAILURE;
+		}
+
+		if(packet->PayloadType() == OVT_PAYLOAD_TYPE_MEDIA_PACKET)
+		{
+			_depacketizer.AppendPacket(packet);
+
+			if (_depacketizer.IsAvaliableMediaPacket())
+			{
+				auto media_packet = _depacketizer.PopMediaPacket();
+
+				// Make Header (Fragmentation) if it is H.264
+				auto track = GetTrack(media_packet->GetTrackId());
+				if(track->GetCodecId() == common::MediaCodecId::H264)
+				{
+					AvcVideoPacketFragmentizer fragmentizer;
+					fragmentizer.MakeHeader(media_packet);
+				}
+
+				_application->SendFrame(GetSharedPtrAs<info::Stream>(), media_packet);
+			}
+		}
+		else
+		{
+			logte("An error occurred while receive data: An unexpected packet was received. Terminate stream thread : %s/%s(%u)", 
+					GetApplicationInfo().GetName().CStr(), GetName().CStr(), GetId());
+			_state = State::ERROR;
+			return Stream::ProcessMediaResult::PROCESS_MEDIA_FAILURE;
+		}
+
+		return Stream::ProcessMediaResult::PROCESS_MEDIA_SUCCESS;
 	}
 }

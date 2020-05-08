@@ -71,6 +71,8 @@ bool IcePortManager::ReleasePort(std::shared_ptr<IcePort> ice_port, std::shared_
 		}
 	}
 
+	ice_port->Close();
+
 	return true;
 }
 
@@ -192,7 +194,7 @@ bool IcePortManager::ParseIceCandidate(const ov::String &ice_candidate, std::vec
 				return false;
 			}
 
-			// It is intended that there is no "break;" statement here
+			[[fallthrough]];
 		}
 
 		case 1:

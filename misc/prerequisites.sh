@@ -3,7 +3,7 @@
 PREFIX=/opt/ovenmediaengine
 TEMP_PATH=/tmp
 
-OME_VERSION=temp/alpine
+OME_VERSION=dev
 OPENSSL_VERSION=1.1.0g
 SRTP_VERSION=2.2.0
 SRT_VERSION=1.3.3
@@ -11,7 +11,8 @@ OPUS_VERSION=1.1.3
 X264_VERSION=20190513-2245-stable
 VPX_VERSION=1.7.0
 FDKAAC_VERSION=0.1.5
-FFMPEG_VERSION=3.4.2
+FFMPEG_VERSION=3.4
+JEMALLOC_VERSION=5.2.1
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
     NCPU=$(sysctl -n hw.ncpu)
@@ -137,7 +138,7 @@ install_ffmpeg()
     (DIR=${TEMP_PATH}/ffmpeg && \
     mkdir -p ${DIR} && \
     cd ${DIR} && \
-    curl -sLf https://www.ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.bz2 | tar -jx --strip-components=1 && \
+    curl -sLf https://github.com/AirenSoft/FFmpeg/archive/ome/${FFMPEG_VERSION}.tar.gz | tar -xz --strip-components=1 && \
     PKG_CONFIG_PATH=${PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH} ./configure \
     --prefix="${PREFIX}" \
     --enable-gpl \
@@ -162,6 +163,18 @@ install_ffmpeg()
     sudo make install && \
     sudo rm -rf ${PREFIX}/share && \
     rm -rf ${DIR}) || fail_exit "ffmpeg"
+}
+
+install_jemalloc()
+{
+    (DIR=${TEMP_PATH}/jemalloc && \
+    mkdir -p ${DIR} && \
+    cd ${DIR} && \
+    curl -sLf https://github.com/jemalloc/jemalloc/releases/download/${JEMALLOC_VERSION}/jemalloc-${JEMALLOC_VERSION}.tar.bz2 | tar -jx --strip-components=1 && \
+    ./configure --prefix="${PREFIX}" && \
+    make && \
+    sudo make install_include install_lib && \
+    rm -rf ${DIR}) || fail_exit "jemalloc"
 }
 
 install_base_ubuntu()
@@ -285,6 +298,7 @@ install_libx264
 install_libvpx
 install_fdk_aac
 install_ffmpeg
+install_jemalloc
 
 echo ${OSNAME} ${OSVERSION}
 

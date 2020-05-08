@@ -7,7 +7,6 @@ LOCAL_STATIC_LIBRARIES := \
 	ovt_publisher \
 	ovt_provider \
 	rtmp_provider \
-	rtsp_provider \
 	rtspc_provider \
 	transcoder \
 	rtc_signalling \
@@ -32,7 +31,10 @@ LOCAL_STATIC_LIBRARIES := \
 	ovlibrary \
 	monitoring \
 	jsoncpp \
-	sqlite
+	sqlite \
+	aac
+
+# rtsp_provider 
 
 LOCAL_PREBUILT_LIBRARIES := \
 	libpugixml.a
@@ -55,6 +57,7 @@ $(call add_pkg_config,openssl)
 $(call add_pkg_config,vpx)
 $(call add_pkg_config,opus)
 $(call add_pkg_config,libsrtp2)
+$(call add_pkg_config,jemalloc)
 
 LOCAL_TARGET := OvenMediaEngine
 

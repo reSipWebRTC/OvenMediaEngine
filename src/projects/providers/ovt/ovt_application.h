@@ -13,18 +13,15 @@ namespace pvd
 {
 	class OvtApplication : public pvd::Application
 	{
-	protected:
-		const char* GetApplicationTypeName() const override
-		{
-			return "OVT Provider";
-		}
-
 	public:
-		static std::shared_ptr<OvtApplication> Create(const info::Application &application_info);
+		static std::shared_ptr<OvtApplication> Create(const std::shared_ptr<Provider> &provider, const info::Application &application_info);
 
-		explicit OvtApplication(const info::Application &info);
+		explicit OvtApplication(const std::shared_ptr<Provider> &provider, const info::Application &info);
 
 		~OvtApplication() override;
+
+		std::shared_ptr<pvd::Stream> CreatePushStream(const uint32_t stream_id, const ov::String &stream_name) override {return nullptr;};
+		std::shared_ptr<pvd::Stream> CreatePullStream(const uint32_t stream_id, const ov::String &stream_name, const std::vector<ov::String> &url_list) override;
 
 		std::shared_ptr<pvd::Stream> CreateStream(const ov::String &stream_name, const std::vector<ov::String> &url_list);
 

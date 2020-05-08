@@ -119,18 +119,21 @@ namespace pub
 		bool OnCreateApplication(const info::Application &app_info) override;
 		bool OnDeleteApplication(const info::Application &app_info) override;
 
-	protected:
-		explicit Publisher(const cfg::Server &server_config, const std::shared_ptr<MediaRouteInterface> &router);
-		virtual ~Publisher() = default;
-
-		const cfg::Server &GetServerConfig() const;
-
 		// Each Publisher should define their type
 		virtual PublisherType GetPublisherType() const = 0;
 		virtual const char *GetPublisherName() const = 0;
+
+	protected:
+		explicit Publisher(const cfg::Server &server_config, const std::shared_ptr<MediaRouteInterface> &router);
+		virtual ~Publisher();
+
+		const cfg::Server &GetServerConfig() const;
+
 		virtual std::shared_ptr<Application> OnCreatePublisherApplication(const info::Application &application_info) = 0;
+		virtual bool OnDeletePublisherApplication(const std::shared_ptr<pub::Application> &application) = 0;
 
 		std::map<info::application_id_t, std::shared_ptr<Application>> 	_applications;
+		std::shared_mutex 		_application_map_mutex;
 
 		const cfg::Server _server_config;
 		std::shared_ptr<MediaRouteInterface> _router;

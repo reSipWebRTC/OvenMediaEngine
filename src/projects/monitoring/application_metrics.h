@@ -7,13 +7,14 @@
 #include "base/info/info.h"
 #include "common_metrics.h"
 #include "stream_metrics.h"
+#include <shared_mutex>
 
 namespace mon
 {
 	class HostMetrics;
 	class ApplicationMetrics : public info::Application, public CommonMetrics, public ov::EnableSharedFromThis<ApplicationMetrics>
 	{
-	const char* GetApplicationTypeName() const override
+	const char* GetApplicationTypeName() final
 	{
 		return "ApplicationMetrics";
 	}
@@ -24,6 +25,18 @@ namespace mon
 			  _host_metrics(host_metrics)
 		{
 		}
+
+		~ApplicationMetrics()
+		{
+			_host_metrics.reset();
+			_streams.clear();
+		}
+
+		void Release()
+		{
+			_streams.clear();
+		}
+
 		std::shared_ptr<HostMetrics> GetHostMetrics()
 		{
 			return _host_metrics;
@@ -45,7 +58,7 @@ namespace mon
 
 	private:
 		std::shared_ptr<HostMetrics> _host_metrics;
-		std::mutex _map_guard;
+		std::shared_mutex _map_guard;
 		std::map<uint32_t, std::shared_ptr<StreamMetrics>> _streams;
 	};
 }  // namespace mon

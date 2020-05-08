@@ -73,6 +73,7 @@ bool OvtPublisher::Stop()
 	if (_server_port != nullptr)
 	{
 		_server_port->RemoveObserver(this);
+		_server_port->Close();
 	}
 
 	return Publisher::Stop();
@@ -80,7 +81,12 @@ bool OvtPublisher::Stop()
 
 std::shared_ptr<pub::Application> OvtPublisher::OnCreatePublisherApplication(const info::Application &application_info)
 {
-	return OvtApplication::Create(application_info);
+	return OvtApplication::Create(OvtPublisher::GetSharedPtrAs<pub::Publisher>(), application_info);
+}
+
+bool OvtPublisher::OnDeletePublisherApplication(const std::shared_ptr<pub::Application> &application)
+{
+	return true;
 }
 
 void OvtPublisher::OnConnected(const std::shared_ptr<ov::Socket> &remote)
@@ -94,7 +100,7 @@ void OvtPublisher::OnDataReceived(const std::shared_ptr<ov::Socket> &remote,
 									const std::shared_ptr<const ov::Data> &data)
 {
 	auto packet = std::make_shared<OvtPacket>(*data);
-	if(!packet->IsValid())
+	if(!packet->IsPacketAvailable())
 	{
 		// If packet is not valid, it is not necessary to response
 		logte("Invalid packet received and ignored");

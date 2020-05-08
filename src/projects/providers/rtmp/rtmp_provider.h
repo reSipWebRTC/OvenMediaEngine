@@ -35,6 +35,11 @@ public:
 	explicit RtmpProvider(const cfg::Server &server_config, const std::shared_ptr<MediaRouteInterface> &router);
 	~RtmpProvider() override;
 
+	ProviderStreamDirection GetProviderStreamDirection() const override
+	{
+		return ProviderStreamDirection::Push;
+	}
+
 	ProviderType GetProviderType() const override
 	{
 		return ProviderType::Rtmp;

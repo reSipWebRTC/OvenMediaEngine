@@ -1,14 +1,14 @@
+#include "publisher.h"
 #include "application.h"
-
-#include <algorithm>
-
 #include "publisher_private.h"
+#include <algorithm>
 
 namespace pub
 {
-	Application::Application(const info::Application &application_info)
+	Application::Application(const std::shared_ptr<Publisher> &publisher, const info::Application &application_info)
 		: info::Application(application_info)
 	{
+		_publisher = publisher;
 		_stop_thread_flag = false;
 	}
 
@@ -17,19 +17,38 @@ namespace pub
 		Stop();
 	}
 
+	const char* Application::GetApplicationTypeName()
+	{
+		if(_publisher == nullptr)
+		{
+			return "";
+		}
+
+		if(_app_type_name.IsEmpty())
+		{
+			_app_type_name.Format("%s %s",  _publisher->GetPublisherName(), "Application");
+		}
+
+		return _app_type_name.CStr();
+	}
+
 	bool Application::Start()
 	{
 		// Thread 생성
 		_stop_thread_flag = false;
 		_worker_thread = std::thread(&Application::WorkerThread, this);
 
-		logti("%s has started [%s] application", GetApplicationTypeName(), GetName().CStr());
+		logti("%s has created [%s] application", GetApplicationTypeName(), GetName().CStr());
 
 		return true;
 	}
 
 	bool Application::Stop()
 	{
+		if(_stop_thread_flag == true)
+		{
+			return true;
+		}
 		_stop_thread_flag = true;
 		_queue_event.Notify();
 
@@ -38,7 +57,7 @@ namespace pub
 			_worker_thread.join();
 		}
 
-		logti("%s has started [%s] application", GetApplicationTypeName(), GetName().CStr());
+		logti("%s has deleted [%s] application", GetApplicationTypeName(), GetName().CStr());
 
 		return true;
 	}
@@ -57,6 +76,7 @@ namespace pub
 			return false;
 		}
 
+		std::lock_guard<std::shared_mutex> lock(_stream_map_mutex);
 		_streams[info->GetId()] = stream;
 
 		return true;
@@ -64,18 +84,18 @@ namespace pub
 
 	bool Application::OnDeleteStream(const std::shared_ptr<info::Stream> &info)
 	{
-		if (_streams.count(info->GetId()) <= 0)
+		std::unique_lock<std::shared_mutex> lock(_stream_map_mutex);
+
+		auto stream_it = _streams.find(info->GetId());
+		if(stream_it == _streams.end())
 		{
 			logte("OnDeleteStream failed. Cannot find stream : %s/%u", info->GetName().CStr(), info->GetId());
 			return false;
 		}
 
-		auto stream = std::static_pointer_cast<Stream>(GetStream(info->GetId()));
-		if (stream == nullptr)
-		{
-			logte("OnDeleteStream failed. Cannot find stream : %s/%u", info->GetName().CStr(), info->GetId());
-			return false;
-		}
+		auto stream = stream_it->second;
+
+		lock.unlock();
 
 		// Stream이 삭제되었음을 자식에게 알려서 처리하게 함
 		if (DeleteStream(info) == false)
@@ -83,8 +103,8 @@ namespace pub
 			return false;
 		}
 
+		lock.lock();
 		_streams.erase(info->GetId());
-
 		stream->Stop();
 
 		return true;
@@ -140,16 +160,19 @@ namespace pub
 
 	std::shared_ptr<Stream> Application::GetStream(uint32_t stream_id)
 	{
-		if (_streams.count(stream_id) <= 0)
+		std::shared_lock<std::shared_mutex> lock(_stream_map_mutex);
+		auto it = _streams.find(stream_id);
+		if (it == _streams.end())
 		{
 			return nullptr;
 		}
 
-		return _streams[stream_id];
+		return it->second;
 	}
 
 	std::shared_ptr<Stream> Application::GetStream(ov::String stream_name)
 	{
+		std::shared_lock<std::shared_mutex> lock(_stream_map_mutex);
 		for (auto const &x : _streams)
 		{
 			auto stream = x.second;
@@ -164,37 +187,35 @@ namespace pub
 
 	std::shared_ptr<Application::VideoStreamData> Application::PopVideoStreamData()
 	{
-		std::unique_lock<std::mutex> lock(_video_stream_queue_guard);
-
+		std::lock_guard<std::mutex> lock(_video_stream_queue_guard);
 		if (_video_stream_queue.empty())
 		{
 			return nullptr;
 		}
 
 		// 데이터를 하나 꺼낸다.
-		auto data = std::move(_video_stream_queue.front());
+		auto data = _video_stream_queue.front();
 		_video_stream_queue.pop();
 		return data;
 	}
 
 	std::shared_ptr<Application::AudioStreamData> Application::PopAudioStreamData()
 	{
-		std::unique_lock<std::mutex> lock(_audio_stream_queue_guard);
-
+		std::lock_guard<std::mutex> lock(_audio_stream_queue_guard);
 		if (_audio_stream_queue.empty())
 		{
 			return nullptr;
 		}
 
 		// 데이터를 하나 꺼낸다.
-		auto data = std::move(_audio_stream_queue.front());
+		auto data = _audio_stream_queue.front();
 		_audio_stream_queue.pop();
 		return data;
 	}
 
 	std::shared_ptr<Application::IncomingPacket> Application::PopIncomingPacket()
 	{
-		std::unique_lock<std::mutex> lock(this->_incoming_packet_queue_guard);
+		std::lock_guard<std::mutex> lock(this->_incoming_packet_queue_guard);
 
 		if (_incoming_packet_queue.empty())
 		{
@@ -202,7 +223,7 @@ namespace pub
 		}
 
 		// 데이터를 하나 꺼낸다.
-		auto packet = std::move(_incoming_packet_queue.front());
+		auto packet = _incoming_packet_queue.front();
 		_incoming_packet_queue.pop();
 		return packet;
 	}

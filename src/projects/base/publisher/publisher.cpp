@@ -9,6 +9,10 @@ namespace pub
 	{
 	}
 
+	Publisher::~Publisher()
+	{
+	}
+
 	bool Publisher::Start()
 	{
 		logti("%s has been started.", GetPublisherName());
@@ -17,6 +21,7 @@ namespace pub
 
 	bool Publisher::Stop()
 	{
+		std::unique_lock<std::shared_mutex> lock(_application_map_mutex);
 		auto it = _applications.begin();
 
 		while (it != _applications.end())
@@ -81,6 +86,7 @@ namespace pub
 		_router->RegisterObserverApp(*application.get(), application);
 
 		// Application Map에 보관
+		std::lock_guard<std::shared_mutex> lock(_application_map_mutex);
 		_applications[application->GetId()] = application;
 
 		return true;
@@ -89,9 +95,38 @@ namespace pub
 	// Delete Application
 	bool Publisher::OnDeleteApplication(const info::Application &app_info)
 	{
-		if (_applications.find(app_info.GetId()) == _applications.end())
+		std::lock_guard<std::shared_mutex> lock(_application_map_mutex);
+		auto item = _applications.find(app_info.GetId());
+
+		logtd("Delete the application: [%s]", app_info.GetName().CStr());
+		if(item == _applications.end())
 		{
-			return true;
+			// Check the reason the app is not created is because it is disabled in the configuration
+			if(app_info.IsDynamicApp() == false)
+			{
+				auto cfg_publisher_list = app_info.GetConfig().GetPublishers().GetPublisherList();
+				for(const auto &cfg_publisher : cfg_publisher_list)
+				{
+					if(cfg_publisher->GetType() == GetPublisherType())
+					{
+						// this provider is disabled
+						if(!cfg_publisher->IsParsed())
+						{
+							return true;
+						}
+					}
+				}
+			}
+
+			logte("%s publihser hasn't the %s application.", ov::Converter::ToString(GetPublisherType()).CStr(), app_info.GetName().CStr());
+			return false;
+		}
+
+		bool result = OnDeletePublisherApplication(item->second);
+		if(result == false)
+		{
+			logte("Could not delete the %s application of the %s publisher", app_info.GetName().CStr(), ov::Converter::ToString(GetPublisherType()).CStr());
+			return false;
 		}
 
 		_applications[app_info.GetId()]->Stop();
@@ -102,6 +137,7 @@ namespace pub
 
 	std::shared_ptr<Application> Publisher::GetApplicationByName(ov::String app_name)
 	{
+		std::shared_lock<std::shared_mutex> lock(_application_map_mutex);
 		for (auto const &x : _applications)
 		{
 			auto application = x.second;
@@ -128,8 +164,9 @@ namespace pub
 
 	std::shared_ptr<Application> Publisher::GetApplicationById(info::application_id_t application_id)
 	{
-		auto application = _applications.find(application_id);
+		std::shared_lock<std::shared_mutex> lock(_application_map_mutex);
 
+		auto application = _applications.find(application_id);
 		if (application == _applications.end())
 		{
 			return nullptr;
@@ -141,7 +178,6 @@ namespace pub
 	std::shared_ptr<Stream> Publisher::GetStream(info::application_id_t application_id, uint32_t stream_id)
 	{
 		auto app = GetApplicationById(application_id);
-
 		if (app != nullptr)
 		{
 			return app->GetStream(stream_id);

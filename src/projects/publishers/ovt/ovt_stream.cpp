@@ -159,14 +159,14 @@ Json::Value& OvtStream::GetDescription()
 
 bool OvtStream::RemoveSessionByConnectorId(int connector_id)
 {
-	auto &sessions = GetAllSessions();
+	auto sessions = GetAllSessions();
 
-	logte("RemoveSessionByConnectorId : all(%d) connector(%d)", sessions.size(), connector_id);
+	logtd("RemoveSessionByConnectorId : all(%d) connector(%d)", sessions.size(), connector_id);
 
 	for(const auto &item : sessions)
 	{
 		auto session = std::static_pointer_cast<OvtSession>(item.second);
-		logte("session : %d %d", session->GetId(), session->GetConnector()->GetId());
+		logtd("session : %d %d", session->GetId(), session->GetConnector()->GetId());
 
 		if(session->GetConnector()->GetId() == connector_id)
 		{

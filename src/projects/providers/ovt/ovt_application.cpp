@@ -9,17 +9,17 @@
 
 namespace pvd
 {
-	std::shared_ptr<OvtApplication> OvtApplication::Create(const info::Application &application_info)
+	std::shared_ptr<OvtApplication> OvtApplication::Create(const std::shared_ptr<Provider> &provider, const info::Application &application_info)
 	{
-		auto application = std::make_shared<OvtApplication>(application_info);
+		auto application = std::make_shared<OvtApplication>(provider, application_info);
 
 		application->Start();
 
 		return application;
 	}
 
-	OvtApplication::OvtApplication(const info::Application &info)
-			: Application(info)
+	OvtApplication::OvtApplication(const std::shared_ptr<Provider> &provider, const info::Application &info)
+			: Application(provider, info)
 	{
 
 	}
@@ -29,11 +29,9 @@ namespace pvd
 
 	}
 
-	std::shared_ptr<pvd::Stream> OvtApplication::CreateStream(const ov::String &stream_name, const std::vector<ov::String> &url_list)
+	std::shared_ptr<pvd::Stream> OvtApplication::CreatePullStream(const uint32_t stream_id, const ov::String &stream_name, const std::vector<ov::String> &url_list)
 	{
-		logtd("OnCreateStream");
-		auto stream = OvtStream::Create(GetSharedPtrAs<pvd::Application>(), stream_name, url_list);
-		return stream;
+		return OvtStream::Create(GetSharedPtrAs<pvd::Application>(), stream_id, stream_name, url_list);
 	}
 
 	bool OvtApplication::Start()

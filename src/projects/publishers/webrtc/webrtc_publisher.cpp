@@ -103,8 +103,10 @@ bool WebRtcPublisher::Start()
 
 bool WebRtcPublisher::Stop()
 {
-	_ice_port.reset();
-	_signalling_server.reset();
+	IcePortManager::Instance()->ReleasePort(_ice_port, IcePortObserver::GetSharedPtr());
+
+	_signalling_server->RemoveObserver(RtcSignallingObserver::GetSharedPtr());
+	_signalling_server->Stop();
 
 	return Publisher::Stop();
 }
@@ -223,7 +225,12 @@ bool WebRtcPublisher::GetMonitoringCollectionData(std::vector<std::shared_ptr<pu
 // Publisher에서 Application 생성 요청이 온다.
 std::shared_ptr<pub::Application> WebRtcPublisher::OnCreatePublisherApplication(const info::Application &application_info)
 {
-	return RtcApplication::Create(application_info, _ice_port, _signalling_server);
+	return RtcApplication::Create(pub::Publisher::GetSharedPtrAs<pub::Publisher>(), application_info, _ice_port, _signalling_server);
+}
+
+bool WebRtcPublisher::OnDeletePublisherApplication(const std::shared_ptr<pub::Application> &application)
+{
+	return true;
 }
 
 /*
@@ -362,6 +369,7 @@ bool WebRtcPublisher::OnStopCommand(const std::shared_ptr<WebSocketClient> &ws_c
 	}
 	// IcePort에서 Remove 한다.
 	_ice_port->RemoveSession(session);
+	session->Stop();
 
 	return true;
 }
@@ -430,6 +438,7 @@ void WebRtcPublisher::OnStateChanged(IcePort &port, const std::shared_ptr<info::
 			StatLog(session->GetWSClient(), stream, session, RequestStreamResult::transfer_completed);
 			// Session을 Stream에서 정리한다.
 			stream->RemoveSession(session->GetId());
+			session->Stop();
 			auto stream_metrics = StreamMetrics(*std::static_pointer_cast<info::Stream>(stream));
 			if (stream_metrics != nullptr)
 			{

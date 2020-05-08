@@ -27,20 +27,36 @@
 #include <web_console/web_console.h>
 
 #define INIT_MODULE(variable, name, create)                                         \
-	logti("Trying to create a" name "module"); 										\
+	logti("Trying to create a " name " module"); 									\
                                                                                     \
 	auto variable = create;                                                         \
                                                                                     \
 	if (variable == nullptr)                                                        \
 	{                                                                               \
-		logte("Failed to initialize" name "module");								\
+		logte("Failed to initialize" name " module");								\
 		return 1;                                                                   \
 	}                                                                               \
                                                                                     \
 	if(orchestrator->RegisterModule(variable) == false)								\
 	{																				\
-		logte("Failed to register" name "module");									\
+		logte("Failed to register" name " module");									\
 		return 1;																	\
+	}																				\
+
+
+#define RELEASE_MODULE(variable, name) 			                                   	\
+	logti("Trying to delete a " name " module");									\
+																					\
+	if( variable != nullptr)														\
+	{																				\
+		if(orchestrator->UnregisterModule(variable) != false)						\
+		{																			\
+			variable->Stop();														\
+		}																			\
+		else																		\
+		{																			\
+			logte("Failed to unregister" name " module");							\
+		}																			\
 	}																				\
 
 #define INIT_EXTERNAL_MODULE(name, func)                                          \
@@ -54,6 +70,8 @@
 			return 1;                                                             \
 		}                                                                         \
 	}
+
+extern bool g_is_terminated;
 
 static void PrintBanner();
 static ov::Daemon::State Initialize(int argc, char *argv[], ParseOption *parse_option);
@@ -126,10 +144,12 @@ int main(int argc, char *argv[])
 	INIT_MODULE(media_router, "MediaRouter", MediaRouter::Create());
 
 	// Initialize Providers
+
 	INIT_MODULE(rtmp_provider, "RTMP Provider", RtmpProvider::Create(*server_config, media_router));
 	INIT_MODULE(ovt_provider, "OVT Provider", pvd::OvtProvider::Create(*server_config, media_router));
 	INIT_MODULE(rtspc_provider, "RTSPC Provider", pvd::RtspcProvider::Create(*server_config, media_router));
-	INIT_MODULE(rtsp_provider, "RTSP Provider", pvd::RtspProvider::Create(*server_config, media_router));
+	// PENDING : INIT_MODULE(rtsp_provider, "RTSP Provider", pvd::RtspProvider::Create(*server_config, media_router));
+	
 
 	// Initialize Transcoder
 	INIT_MODULE(transcoder, "Transcoder", Transcoder::Create(media_router));
@@ -162,12 +182,26 @@ int main(int argc, char *argv[])
 		ov::Daemon::SetEvent();
 	}
 
-	while (true)
+	while (g_is_terminated == false)
 	{
-		sleep(5);
-		//Plan to start / stop with external signals
-		//mon::Monitoring::GetInstance()->ShowInfo();
+		sleep(1);
 	}
+
+	orchestrator->Release();
+	// Relase all modules
+	monitor->Release();
+
+	RELEASE_MODULE(media_router, "MediaRouter");
+	RELEASE_MODULE(rtmp_provider, "RTMP Provider");
+	RELEASE_MODULE(ovt_provider, "OVT Provider");
+	RELEASE_MODULE(rtspc_provider, "RTSPC Provider");
+	// PENDING : RELEASE_MODULE(rtsp_provider, "RTSP Provider");
+	RELEASE_MODULE(transcoder, "Transcoder");
+	RELEASE_MODULE(webrtc_publisher, "WebRTC Publisher");
+	RELEASE_MODULE(hls_publisher, "HLS Publisher");
+	RELEASE_MODULE(dash_publisher, "MPEG-DASH Publisher");
+	RELEASE_MODULE(lldash_publisher, "Low-Latency MPEG-DASH Publisher");
+	RELEASE_MODULE(ovt_publisher, "OVT Publisher");
 
 	Uninitialize();
 
@@ -194,6 +228,7 @@ static void PrintBanner()
 	logti("  SRTP: %s", GetSrtpVersion());
 	logti("  OpenSSL: %s", GetOpenSslVersion());
 	logti("    Configuration: %s", GetOpenSslConfiguration());
+	logti("  jemalloc: %s", GetJemallocVersion());
 }
 
 static ov::Daemon::State Initialize(int argc, char *argv[], ParseOption *parse_option)

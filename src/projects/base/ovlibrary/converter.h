@@ -13,6 +13,7 @@
 #include "./string.h"
 #include "base/media_route/media_type.h"
 
+#define __STDC_FORMAT_MACROS 1
 #include <inttypes.h>
 #include <string>
 #include <ctime>
@@ -84,15 +85,20 @@ namespace ov
 
 			return ov::Json::Stringify(value);
 		}
-	
+
 		static ov::String ToString(const std::chrono::system_clock::time_point &tp)
 		{
 			std::time_t t = std::chrono::system_clock::to_time_t(tp);
-			ov::String ts = std::ctime(&t);
-			ts.SetLength(ts.GetLength() - 1);
-			return ts;
-		}
+			char buffer[32] { 0 };
+			::ctime_r(&t, buffer);
+			// Ensure null-terminated
+			buffer[OV_COUNTOF(buffer) - 1] = '\0';
 
+			ov::String time_string = buffer;
+
+			return time_string.Trim();
+		}
+		
 		static ov::String ToString(const StreamSourceType &type)
 		{
 			switch(type)

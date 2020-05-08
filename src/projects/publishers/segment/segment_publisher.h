@@ -81,7 +81,6 @@ private:
 	std::chrono::system_clock::time_point	_last_requested_time;
 };
 
-// It is used to calculate concurrent users.
 class SegmentRequestInfo
 {
 public:
@@ -93,6 +92,7 @@ public:
 		_sequence_number = seq;
 		_duration = (double)duration / (double)(PACKTYZER_DEFAULT_TIMESCALE); // convert to second
 		_last_requested_time = std::chrono::system_clock::now();
+		_count = 0;
 	}
 
 	SegmentRequestInfo(const SegmentRequestInfo &info)
@@ -103,6 +103,7 @@ public:
 		_sequence_number = info._sequence_number;
 		_duration = info._duration;
 		_last_requested_time = info._last_requested_time;
+		_count = info._count;
 	}
 
 	bool IsNextRequest(const SegmentRequestInfo &next)
@@ -113,15 +114,17 @@ public:
 			_ip_address == next._ip_address && 
 			_sequence_number + 1 == next._sequence_number)
 		{
+			// Not measuring the time interval between segment requests will give more accurate results when the network is bad.
 			return true;
 
+			/*TODO(Getroot): Check again how effective this function is
 			auto gap = std::chrono::duration_cast<std::chrono::seconds>(next._last_requested_time - _last_requested_time).count();
-			
 			// the next request comes in within a short time
-			if(gap < _duration * 2)
+			if(gap < _duration * 5)
 			{
 				return true;
 			}
+			*/
 		}
 		return false;
 	}
@@ -129,7 +132,7 @@ public:
 	bool IsExpiredRequest()
 	{
 		auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - _last_requested_time).count();
-		if(elapsed > _duration * 3)
+		if(elapsed > _duration * 10)
 		{
 			return true;
 		}
@@ -142,11 +145,17 @@ public:
 		return ov::Converter::ToString(_last_requested_time);
 	}
 
+	void SetCount(uint32_t count)
+	{
+		_count = count;
+	}
+
 	const PublisherType& GetPublisherType() const { return _publisher_type; }
 	const info::Stream& GetStreamInfo() const { return _stream_info; }
 	const ov::String& GetIpAddress() const { return _ip_address; }
 	int	GetSequenceNumber() const { return _sequence_number; }
 	int64_t GetDuration() const { return _duration; }
+	uint32_t GetCount() const { return _count; }
 
 private:
 	PublisherType		_publisher_type;
@@ -154,6 +163,7 @@ private:
 	ov::String			_ip_address;
 	int					_sequence_number;
 	int64_t				_duration;
+	uint32_t			_count = 0;
 	std::chrono::system_clock::time_point	_last_requested_time;
 };
 
@@ -189,12 +199,15 @@ public:
 
 	bool GetMonitoringCollectionData(std::vector<std::shared_ptr<pub::MonitoringCollectionData>> &collections) override;
 
+	bool Stop() override;
+
 protected:
 	SegmentPublisher(const cfg::Server &server_config, const std::shared_ptr<MediaRouteInterface> &router);
 	~SegmentPublisher() override;
 
 	bool Start(std::map<int, std::shared_ptr<HttpServer>> &http_server_manager, const cfg::TlsPort &port_config, const std::shared_ptr<SegmentStreamServer> &stream_server);
 	virtual bool Start(std::map<int, std::shared_ptr<HttpServer>> &http_server_manager) = 0;
+	
 
 	bool HandleSignedUrl(const ov::String &app_name, const ov::String &stream_name, 
 						const std::shared_ptr<HttpClient> &client, const std::shared_ptr<const ov::Url> &request_url,
@@ -223,7 +236,7 @@ private:
 	const std::shared_ptr<PlaylistRequestInfo>	GetSessionRequestInfoBySegmentRequestInfo(const SegmentRequestInfo &info);
 	bool		IsAuthorizedSession(const PlaylistRequestInfo &info);
 
-	void		UpdateSegmentRequestInfo(const SegmentRequestInfo &info);
+	void		UpdateSegmentRequestInfo(SegmentRequestInfo &info);
 
 	bool					_run_thread = false;
 	std::recursive_mutex 	_playlist_request_table_lock;

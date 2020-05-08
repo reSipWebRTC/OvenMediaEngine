@@ -1,18 +1,17 @@
-
 #include "ovt_private.h"
 #include "ovt_application.h"
 #include "ovt_stream.h"
 #include "ovt_session.h"
 
-std::shared_ptr<OvtApplication> OvtApplication::Create(const info::Application &application_info)
+std::shared_ptr<OvtApplication> OvtApplication::Create(const std::shared_ptr<pub::Publisher> &publisher, const info::Application &application_info)
 {
-	auto application = std::make_shared<OvtApplication>(application_info);
+	auto application = std::make_shared<OvtApplication>(publisher, application_info);
 	application->Start();
 	return application;
 }
 
-OvtApplication::OvtApplication(const info::Application &application_info)
-		: Application(application_info)
+OvtApplication::OvtApplication(const std::shared_ptr<pub::Publisher> &publisher, const info::Application &application_info)
+		: Application(publisher, application_info)
 {
 
 }
@@ -55,13 +54,7 @@ bool OvtApplication::DeleteStream(const std::shared_ptr<info::Stream> &info)
 		logte("OvtApplication::Delete stream failed. Cannot find stream (%s)", info->GetName().CStr());
 		return false;
 	}
-
-	auto sessions = stream->GetAllSessions();
-	for(auto const &x : sessions)
-	{
-		auto session = std::static_pointer_cast<OvtSession>(x.second);
-	}
-
+	
 	logtd("OvtApplication %s/%s stream has been deleted", GetName().CStr(), stream->GetName().CStr());
 
 	return true;

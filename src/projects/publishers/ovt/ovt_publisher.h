@@ -18,10 +18,10 @@ public:
 
 	OvtPublisher(const cfg::Server &server_config, const std::shared_ptr<MediaRouteInterface> &router);
 	~OvtPublisher() override;
+	bool Stop() override;
 
 private:
 	bool Start() override;
-	bool Stop() override;
 
 	//--------------------------------------------------------------------
 	// Implementation of Publisher
@@ -36,6 +36,8 @@ private:
 	}
 
 	std::shared_ptr<pub::Application> OnCreatePublisherApplication(const info::Application &application_info) override;
+	bool OnDeletePublisherApplication(const std::shared_ptr<pub::Application> &application) override;
+	
 	bool GetMonitoringCollectionData(std::vector<std::shared_ptr<pub::MonitoringCollectionData>> &collections) override;
 
 	//--------------------------------------------------------------------

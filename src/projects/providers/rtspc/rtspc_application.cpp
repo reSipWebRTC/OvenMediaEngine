@@ -9,17 +9,17 @@
 
 namespace pvd
 {
-	std::shared_ptr<RtspcApplication> RtspcApplication::Create(const info::Application &application_info)
+	std::shared_ptr<RtspcApplication> RtspcApplication::Create(const std::shared_ptr<Provider> &provider, const info::Application &application_info)
 	{
-		auto application = std::make_shared<RtspcApplication>(application_info);
+		auto application = std::make_shared<RtspcApplication>(provider, application_info);
 
 		application->Start();
 
 		return application;
 	}
 
-	RtspcApplication::RtspcApplication(const info::Application &info)
-			: Application(info)
+	RtspcApplication::RtspcApplication(const std::shared_ptr<Provider> &provider, const info::Application &info)
+			: Application(provider, info)
 	{
 
 	}
@@ -29,11 +29,9 @@ namespace pvd
 
 	}
 
-	std::shared_ptr<pvd::Stream> RtspcApplication::CreateStream(const ov::String &stream_name, const std::vector<ov::String> &url_list)
+	std::shared_ptr<pvd::Stream> RtspcApplication::CreatePullStream(const uint32_t stream_id, const ov::String &stream_name, const std::vector<ov::String> &url_list)
 	{
-		logtd("OnCreateStream");
-		auto stream = RtspcStream::Create(GetSharedPtrAs<pvd::Application>(), stream_name, url_list);
-		return stream;
+		return RtspcStream::Create(GetSharedPtrAs<pvd::Application>(), stream_id, stream_name, url_list);
 	}
 
 	bool RtspcApplication::Start()

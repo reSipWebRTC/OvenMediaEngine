@@ -15,10 +15,18 @@ namespace mon
 			host->ShowInfo();
 		}
 	}
+
+	void Monitoring::Release()
+	{
+		for(const auto &host : _hosts)
+		{
+			host.second->Release();
+		}
+	}
 	
 	bool Monitoring::OnHostCreated(const info::Host &host_info)
 	{
-		std::unique_lock<std::mutex> lock(_map_guard);
+		std::unique_lock<std::shared_mutex> lock(_map_guard);
 		if(_hosts.find(host_info.GetId()) != _hosts.end())
 		{
 			return true;
@@ -37,12 +45,17 @@ namespace mon
 	}
 	bool Monitoring::OnHostDeleted(const info::Host &host_info)
 	{
-		std::unique_lock<std::mutex> lock(_map_guard);
-		if (_hosts.find(host_info.GetId()) == _hosts.end())
+		std::unique_lock<std::shared_mutex> lock(_map_guard);
+		auto it = _hosts.find(host_info.GetId());
+
+		if (it == _hosts.end())
 		{
 			return false;
 		}
-		_hosts.erase(host_info.GetId());
+
+		auto host = it->second;
+		_hosts.erase(it);
+		host->Release();
 
 		logti("Delete HostMetrics(%s) for monitoring", host_info.GetName().CStr());
 		return true;
@@ -90,6 +103,7 @@ namespace mon
 
 	std::shared_ptr<HostMetrics> Monitoring::GetHostMetrics(const info::Host &host_info)
 	{
+		std::shared_lock<std::shared_mutex> lock(_map_guard);
 		if (_hosts.find(host_info.GetId()) == _hosts.end())
 		{
 			return nullptr;
@@ -126,11 +140,7 @@ namespace mon
 		auto stream_metric = app_metric->GetStreamMetrics(stream);
 		if (stream_metric == nullptr)
 		{
-			// If the stream metrics is not exist, then create!
-			if (!OnStreamCreated(stream))
-			{
-				return nullptr;
-			}
+			return nullptr;
 		}
 
 		stream_metric = app_metric->GetStreamMetrics(stream);

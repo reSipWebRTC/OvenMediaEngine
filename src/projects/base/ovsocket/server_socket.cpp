@@ -92,7 +92,7 @@ namespace ov
 
 		// Garbage collection
 		{
-			std::lock_guard<std::mutex> lock(_client_list_mutex);
+			std::lock_guard<std::shared_mutex> lock(_client_list_mutex);
 			_disconnected_client_list.clear();
 		}
 
@@ -175,7 +175,7 @@ namespace ov
 		uint32_t epoll_events = event->events;
 
 		{
-			std::lock_guard<std::mutex> lock(_client_list_mutex);
+			std::shared_lock<std::shared_mutex> lock(_client_list_mutex);
 			auto item = _client_list.find(key);
 
 			if (item == _client_list.end())
@@ -261,9 +261,10 @@ namespace ov
 					break;
 				}
 
-				if (data->GetLength() == 0L)
+				// TODO(dimiden): (ClientSocketBlocking) Temporarily comment while processing as blocking
+				// if (data->GetLength() == 0L)
 				{
-					// 다음 데이터를 기다려야 함
+					// Waiting for next data
 					break;
 				}
 			}
@@ -300,7 +301,7 @@ namespace ov
 		bool remove = false;
 
 		{
-			std::lock_guard<std::mutex> lock(_client_list_mutex);
+			std::lock_guard<std::shared_mutex> lock(_client_list_mutex);
 
 			auto item = _client_list.find(client_socket.get());
 

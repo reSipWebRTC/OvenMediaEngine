@@ -237,6 +237,7 @@ bool RtcStream::Start(uint32_t worker_count)
 
 bool RtcStream::Stop()
 {
+	_offer_sdp->Release();
 	_packetizers.clear();
 
 	return Stream::Stop();
@@ -272,7 +273,7 @@ bool RtcStream::OnRtpPacketized(std::shared_ptr<RtpPacket> packet)
 	BroadcastPacket(payload_type, packet->GetData());
 	if(_stream_metrics != nullptr)
 	{
-		_stream_metrics->IncreaseBytesOut(PublisherType::Webrtc, packet->GetData()->GetLength() * GetAllSessions().size());
+		_stream_metrics->IncreaseBytesOut(PublisherType::Webrtc, packet->GetData()->GetLength() * GetSessionCount());
 	}
 
 	return true;

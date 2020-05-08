@@ -21,7 +21,6 @@ SegmentPublisher::SegmentPublisher(const cfg::Server &server_config, const std::
 
 SegmentPublisher::~SegmentPublisher()
 {
-	_run_thread = false;
 	logtd("Publisher has been destroyed");
 }
 
@@ -63,6 +62,19 @@ bool SegmentPublisher::Start(std::map<int, std::shared_ptr<HttpServer>> &http_se
 		  has_tls_port ? tls_address.ToString().CStr() : "");
 
 	return Publisher::Start();
+}
+
+bool SegmentPublisher::Stop()
+{
+	_run_thread = false;
+	if(_worker_thread.joinable())
+	{
+		_worker_thread.join();
+	}
+
+	_stream_server->RemoveObserver(SegmentStreamObserver::GetSharedPtr());
+	_stream_server->Stop();
+	return Publisher::Stop();
 }
 
 bool SegmentPublisher::GetMonitoringCollectionData(std::vector<std::shared_ptr<pub::MonitoringCollectionData>> &collections)
@@ -177,6 +189,10 @@ bool SegmentPublisher::OnPlayListRequest(const std::shared_ptr<HttpClient> &clie
 		return true;
 	}
 
+	logti("Playlist requested (%s/%s/%s) from %s", 
+						app_name.CStr(), stream_name.CStr(), file_name.CStr(), 
+						client->GetRequest()->GetRemote()->GetRemoteAddress()->ToString().CStr());
+
 	client->GetResponse()->SetStatusCode(HttpStatusCode::OK);
 	return true;
 }
@@ -210,11 +226,17 @@ bool SegmentPublisher::OnSegmentRequest(const std::shared_ptr<HttpClient> &clien
 	}
 
 	// To manage sessions
-	UpdateSegmentRequestInfo(SegmentRequestInfo(GetPublisherType(),
+	logti("Segment requested (%s/%s/%s) from %s : Segment number : %u Duration : %u", 
+						app_name.CStr(), stream_name.CStr(), file_name.CStr(), 
+						client->GetRequest()->GetRemote()->GetRemoteAddress()->ToString().CStr(),
+						segment->sequence_number, segment->duration);
+
+	auto request_info = SegmentRequestInfo(GetPublisherType(),
 												*std::static_pointer_cast<info::Stream>(stream),
 												client->GetRequest()->GetRemote()->GetRemoteAddress()->GetIpAddress(),
 												segment->sequence_number,
-												segment->duration));
+												segment->duration);
+	UpdateSegmentRequestInfo(request_info);
 
 	return true;
 }
@@ -223,7 +245,6 @@ bool SegmentPublisher::StartSessionTableManager()
 {
 	_run_thread = true;
 	_worker_thread = std::thread(&SegmentPublisher::RequestTableUpdateThread, this);
-	_worker_thread.detach();
 
 	return true;
 }
@@ -417,11 +438,11 @@ bool SegmentPublisher::IsAuthorizedSession(const PlaylistRequestInfo &info)
 	return false;
 }
 
-void SegmentPublisher::UpdateSegmentRequestInfo(const SegmentRequestInfo &info)
+void SegmentPublisher::UpdateSegmentRequestInfo(SegmentRequestInfo &info)
 {
 	bool new_session = true;
 	std::unique_lock<std::recursive_mutex> table_lock(_segment_request_table_lock);
-
+	
 	auto select_count = _segment_request_table.count(info.GetIpAddress().CStr());
 	if (select_count > 0)
 	{
@@ -433,6 +454,9 @@ void SegmentPublisher::UpdateSegmentRequestInfo(const SegmentRequestInfo &info)
 
 			if (item->IsNextRequest(info))
 			{
+				auto count = item->GetCount();
+				info.SetCount(count++);
+
 				itr = _segment_request_table.erase(itr);
 				new_session = false;
 				break;
@@ -443,6 +467,10 @@ void SegmentPublisher::UpdateSegmentRequestInfo(const SegmentRequestInfo &info)
 			}
 		}
 	}
+
+	_segment_request_table.insert(std::pair<std::string, std::shared_ptr<SegmentRequestInfo>>(info.GetIpAddress().CStr(), std::make_shared<SegmentRequestInfo>(info)));
+
+	table_lock.unlock();
 
 	// It is a new viewer!
 	if (new_session)
@@ -497,8 +525,6 @@ void SegmentPublisher::UpdateSegmentRequestInfo(const SegmentRequestInfo &info)
 			
 		}
 	}
-
-	_segment_request_table.insert(std::pair<std::string, std::shared_ptr<SegmentRequestInfo>>(info.GetIpAddress().CStr(), std::make_shared<SegmentRequestInfo>(info)));
 }
 
 bool SegmentPublisher::HandleSignedUrl(const ov::String &app_name, const ov::String &stream_name,

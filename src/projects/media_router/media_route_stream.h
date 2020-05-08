@@ -21,13 +21,14 @@
 #include "bitstream/bitstream_to_annexb.h"
 #include "bitstream/bitstream_to_adts.h"
 #include "bitstream/bitstream_to_annexa.h"
+#include "base/media_route/media_queue.h"
 
 #include "bitstream/avc_video_packet_fragmentizer.h"
 
 class MediaRouteStream
 {
 public:
-	MediaRouteStream(std::shared_ptr<info::Stream> &stream);
+	MediaRouteStream(const std::shared_ptr<info::Stream> &stream);
 	~MediaRouteStream();
 
 	// Query original stream information
@@ -38,17 +39,13 @@ public:
 	// Queue interfaces
 	bool Push(std::shared_ptr<MediaPacket> media_packet);
 	std::shared_ptr<MediaPacket> Pop();
-	uint32_t Size();
 
 private:
 	std::shared_ptr<info::Stream> _stream;
 	MediaRouteApplicationConnector::ConnectorType _application_connector_type;
 
 	std::map<uint8_t, std::shared_ptr<MediaPacket>> _media_packet_stored;
-
-	// 2019/11/22 Getroot
-	// Change shared_ptr to shared_ptr
-	std::queue<std::shared_ptr<MediaPacket>> _media_packets;
+	MediaQueue<std::shared_ptr<MediaPacket>> _media_packets;
 
 	////////////////////////////
 	// bitstream filters

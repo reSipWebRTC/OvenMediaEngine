@@ -1,6 +1,7 @@
 #pragma once
 
 #include <utility>
+#include <shared_mutex>
 #include "base/common_types.h"
 #include "base/info/stream.h"
 #include "base/info/session.h"
@@ -20,13 +21,11 @@ namespace pub
 		Error
 	};
 
+	class Publisher;
 	class Application : public info::Application, public MediaRouteApplicationObserver
 	{
 	public:
-		const char* GetApplicationTypeName() const override
-		{
-			return "Publisher Base Application";
-		}
+		const char* GetApplicationTypeName() final;
 
 		// MediaRouteApplicationObserver Implementation
 		bool OnCreateStream(const std::shared_ptr<info::Stream> &info) override;
@@ -50,7 +49,7 @@ namespace pub
 		virtual bool Stop();
 
 	protected:
-		explicit Application(const info::Application &application_info);
+		explicit Application(const std::shared_ptr<Publisher> &publisher, const info::Application &application_info);
 		virtual ~Application();
 
 		// Stream에 VideoFrame을 전송한다.
@@ -123,6 +122,8 @@ namespace pub
 		};
 		std::shared_ptr<Application::IncomingPacket> PopIncomingPacket();
 
+		std::shared_mutex 		_stream_map_mutex;
+
 		bool _stop_thread_flag;
 		std::thread _worker_thread;
 		ov::Semaphore _queue_event;
@@ -138,6 +139,8 @@ namespace pub
 
 		int64_t	_last_video_ts_ms = 0;
 		int64_t	_last_audio_ts_ms = 0;
+
+		std::shared_ptr<Publisher>		_publisher;
 
 		//std::queue<std::shared_ptr<AudioStreamData>>	_audio_stream_queue;
 	};

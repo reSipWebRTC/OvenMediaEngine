@@ -4,19 +4,21 @@
 #include "modules/ice/ice_port_manager.h"
 
 
-std::shared_ptr<RtcApplication> RtcApplication::Create(const info::Application &application_info,
+std::shared_ptr<RtcApplication> RtcApplication::Create(const std::shared_ptr<pub::Publisher> &publisher, 
+													   const info::Application &application_info,
                                                        const std::shared_ptr<IcePort> &ice_port,
                                                        const std::shared_ptr<RtcSignallingServer> &rtc_signalling)
 {
-	auto application = std::make_shared<RtcApplication>(application_info, ice_port, rtc_signalling);
+	auto application = std::make_shared<RtcApplication>(publisher, application_info, ice_port, rtc_signalling);
 	application->Start();
 	return application;
 }
 
-RtcApplication::RtcApplication(const info::Application &application_info,
+RtcApplication::RtcApplication(const std::shared_ptr<pub::Publisher> &publisher, 
+							   const info::Application &application_info,
                                const std::shared_ptr<IcePort> &ice_port,
                                const std::shared_ptr<RtcSignallingServer> &rtc_signalling)
-	: Application(application_info)
+	: Application(publisher, application_info)
 {
 	_ice_port = ice_port;
 	_rtc_signalling = rtc_signalling;
@@ -57,7 +59,7 @@ bool RtcApplication::DeleteStream(const std::shared_ptr<info::Stream> &info)
 	}
 
 	// 모든 Session의 연결을 종료한다.
-	const auto &sessions = stream->GetAllSessions();
+	const auto sessions = stream->GetAllSessions();
 	for(auto it = sessions.begin(); it != sessions.end();)
 	{
 		auto session = std::static_pointer_cast<RtcSession>(it->second);
